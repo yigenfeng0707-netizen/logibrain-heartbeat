@@ -1,0 +1,82 @@
+name: heartbeat
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+    - cron: '0 1 1 * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: write
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 健康检查
+        id: check
+        run: |
+          H=$(curl -s -m 20 -o /tmp/h.json -w "%{http_code}" https://yunliyuan.cn/api/v1/health || echo 000)
+          grep -q '"ok"' /tmp/h.json 2>/dev/null || H=fail
+          O=$(curl -s -m 20 -o /dev/null -w "%{http_code}" https://yunliyuan.cn/onto || echo 000)
+          OK=1
+          [ "$H" != "fail" ] && [ "$H" != "000" ] && [ "$O" = "200" ] || OK=0
+          echo "health=$H onto=$O ok=$OK"
+          echo "health=$H" >> "$GITHUB_OUTPUT"
+          echo "onto=$O" >> "$GITHUB_OUTPUT"
+          echo "ok=$OK" >> "$GITHUB_OUTPUT"
+
+      - name: 创建告警 issue（失败时）
+        if: steps.check.outputs.ok == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TS=$(date -u +%FT%TZ)
+          OPEN=$(gh issue list -R "$GITHUB_REPOSITORY" --label alert --state open --json number --jq 'length')
+          if [ "$OPEN" -eq 0 ]; then
+            gh issue create -R "$GITHUB_REPOSITORY" \
+              --title "🔴 yunliyuan.cn 健康检查失败 $TS" \
+              --label "alert" \
+              --body "**@yigenfeng0707-netizen 线上服务异常**（检查时间 $TS）
+
+          - /api/v1/health → \`${{ steps.check.outputs.health }}\`（期望 200 且 status=ok）
+          - /onto 页面 → \`${{ steps.check.outputs.onto }}\`（期望 200）
+
+          **处理预案**
+          1. \`ssh -i ~/.ssh/logibrain_ecs.pem root@47.103.35.132\`
+          2. \`systemctl status logibrain\`；\`journalctl -u logibrain -n 50\`
+          3. 重启：\`systemctl restart logibrain\`（警惕 start-limit-hit 状态——09-01 曾因此停机 4 周）
+          4. 需回滚时查 \`/opt/logibrain/shared/deploy_audit.log\` 选版本，切 \`/opt/logibrain/previous\`
+          5. 恢复后本 issue 会被下一次心跳自动关闭"
+          else
+            echo "已有未决告警 issue，不重复创建"
+          fi
+
+      - name: 恢复并关闭告警（成功时）
+        if: steps.check.outputs.ok == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TS=$(date -u +%FT%TZ)
+          for N in $(gh issue list -R "$GITHUB_REPOSITORY" --label alert --state open --json number --jq '.[].number'); do
+            gh issue close -R "$GITHUB_REPOSITORY" "$N" \
+              --comment "✅ 服务已恢复（$TS health=${{ steps.check.outputs.health }} onto=${{ steps.check.outputs.onto }}），由心跳自动关闭。"
+          done
+
+  keepalive:
+    # 每月 1 日空提交一次，防 GitHub 60 天无活动停用定时任务
+    if: github.event.schedule == '0 1 1 * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TS=$(date -u +%FT%TZ)
+          gh api -X PUT "repos/$GITHUB_REPOSITORY/contents/README.md" \
+            -f message="keepalive $TS" \
+            -f content="$(base64 -w0 README.md)" >/dev/null \
+            && echo "keepalive commit done"
