@@ -1,0 +1,30 @@
+﻿# 榄旀惌鍒涚┖闂翠繚娲?ping锛圙itHub Actions cron锛?# 鐢ㄦ硶: 鏀惧叆浠绘剰 GitHub 浠撳簱 .github/workflows/keepalive.yml, 鏇挎崲 DEMO_URL
+# 鍧戜綅: 1) curl 蹇呴』甯︽祻瑙堝櫒 UA (ms.show CDN 杩囨护); 2) 鏂颁粨搴?cron 鍙兘鏁板皬鏃朵笉瑙﹀彂,
+#          寤鸿鎶婃湰鏂囦欢鍔犳寕鍒板凡楠岃瘉浼氳Е鍙戠殑鏃т粨搴?(鏂板鐙珛 yml, 涓嶅姩鍘熶换鍔?
+name: Keepalive ModelScope Demo
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    name: Ping demo health endpoint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping demo URL
+        shell: bash
+        run: |
+          DEMO_URL="https://gsym236998-park-carbon-copilot.ms.show"
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120' "${DEMO_URL}/api/health" || echo 000)
+          echo "HTTP ${code}"
+          if [ "$code" = "200" ]; then exit 0; fi
+          echo "鏈氨缁紝绛夊緟 20s 鍚庨噸璇?.."
+          sleep 20
+          code2=$(curl -s -o /dev/null -w '%{http_code}' --max-time 90 -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120' "${DEMO_URL}/api/health" || echo 000)
+          echo "Retry HTTP ${code2}"
+          [ "$code2" = "200" ] && exit 0
+          echo "::warning::demo 鏈搷搴旓紙HTTP ${code}/${code2}锛?
+          exit 0
